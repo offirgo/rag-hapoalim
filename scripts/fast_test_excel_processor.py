@@ -16,3 +16,10 @@ print(f"   - Sheets: {document.metadata.sheet_names}")
 print(f"   - Rows: {document.metadata.total_rows}")
 print(f"   - Chunks: {len(document.chunks)}")
 print(f"   - Sample chunk: {document.chunks[0].content[:100]}...")
+
+print(f"\nAll chunks:")
+for i, chunk in enumerate(document.chunks):
+    print(f"Chunk {i+1} (ID: {chunk.chunk_id}):")
+    print(f"  Content: {chunk.content}")
+    print(f"  Metadata: {chunk.metadata}")
+    print()

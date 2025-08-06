@@ -1,0 +1,519 @@
+"""
+Tests for WordProcessor
+Comprehensive test suite covering functionality, error handling, and edge cases
+"""
+
+import pytest
+import tempfile
+from pathlib import Path
+from unittest.mock import patch, MagicMock
+from docx import Document
+from docx.text.paragraph import Paragraph
+
+from src.models.document import (
+    ProcessingConfig,
+    ProcessingStatus,
+    DocumentType
+)
+from src.document_processor import WordProcessor
+from src.document_processor.word_processor import WordProcessingError
+
+
+class TestWordProcessorInitialization:
+    """Test WordProcessor initialization and configuration"""
+
+    def test_init_with_default_config(self):
+        """Test initialization with default configuration"""
+        processor = WordProcessor()
+
+        assert processor.config is not None
+        assert isinstance(processor.config, ProcessingConfig)
+        assert processor.config.max_chunk_size == 1000  # Default value
+        assert processor.config.chunk_overlap == 100  # Default value
+
+    def test_init_with_custom_config(self):
+        """Test initialization with custom configuration"""
+        custom_config = ProcessingConfig(
+            max_chunk_size=2000,
+            chunk_overlap=200,
+            skip_empty_paragraphs=False
+        )
+        processor = WordProcessor(custom_config)
+
+        assert processor.config.max_chunk_size == 2000
+        assert processor.config.chunk_overlap == 200
+        assert processor.config.skip_empty_paragraphs is False
+
+    def test_init_validates_config(self):
+        """Test that invalid config raises error during initialization"""
+        invalid_config = ProcessingConfig(
+            max_chunk_size=500,
+            chunk_overlap=600  # Overlap > max_chunk_size
+        )
+
+        with pytest.raises(ValueError, match="chunk_overlap must be less than max_chunk_size"):
+            WordProcessor(invalid_config)
+
+
+class TestWordProcessorValidation:
+    """Test file validation functionality"""
+
+    def setup_method(self):
+        """Set up test processor for each test"""
+        self.processor = WordProcessor()
+
+    def test_validate_nonexistent_file(self):
+        """Test validation fails for nonexistent file"""
+        document = self.processor.process("nonexistent.docx")
+
+        assert document.metadata.processing_status == ProcessingStatus.FAILED
+        assert "File does not exist" in document.metadata.error_message
+        assert len(document.chunks) == 0
+
+    def test_validate_directory_instead_of_file(self, tmp_path):
+        """Test validation fails when path is a directory"""
+        directory = tmp_path / "test_dir"
+        directory.mkdir()
+
+        document = self.processor.process(directory)
+        assert document.metadata.processing_status == ProcessingStatus.FAILED
+        assert "Path is not a file" in document.metadata.error_message
+        assert len(document.chunks) == 0
+
+    def test_validate_empty_file(self, tmp_path):
+        """Test validation fails for empty file"""
+        empty_file = tmp_path / "empty.docx"
+        empty_file.touch()  # Create empty file
+
+        document = self.processor.process(empty_file)
+        assert document.metadata.processing_status == ProcessingStatus.FAILED
+        assert "File is empty" in document.metadata.error_message
+        assert len(document.chunks) == 0
+
+    def test_validate_unsupported_extension(self, tmp_path):
+        """Test validation fails for unsupported file extensions"""
+        txt_file = tmp_path / "test.txt"
+        txt_file.write_text("not a word file")
+
+        document = self.processor.process(txt_file)
+        assert document.metadata.processing_status == ProcessingStatus.FAILED
+        assert "Unsupported file extension" in document.metadata.error_message
+        assert len(document.chunks) == 0
+
+    def test_validate_supported_extensions(self, tmp_path):
+        """Test that .docx extension is supported"""
+        # Create a simple Word document
+        docx_file = tmp_path / "test.docx"
+        doc = Document()
+        doc.add_paragraph("Test content")
+        doc.save(docx_file)
+
+        # Should process successfully (not fail validation)
+        document = self.processor.process(docx_file)
+        assert document.metadata.processing_status == ProcessingStatus.COMPLETED
+
+
+class TestWordProcessorWithRealData:
+    """Test WordProcessor with real sample data"""
+
+    def setup_method(self):
+        """Set up test processor and check for sample data"""
+        self.processor = WordProcessor()
+
+        # Find sample file relative to project root
+        test_file_dir = Path(__file__).parent.parent.parent  # Go up from tests/document_processor/
+        self.sample_file = test_file_dir / "data" / "company_handbook.docx"
+
+        if not self.sample_file.exists():
+            pytest.skip(f"Sample data file not found at {self.sample_file}. Run 'python create_sample_data.py' first.")
+
+    def test_process_sample_handbook_file(self):
+        """Test processing the sample company handbook file"""
+        document = self.processor.process(self.sample_file)
+
+        # Check metadata
+        assert document.metadata.filename == "company_handbook.docx"
+        assert document.metadata.document_type == DocumentType.WORD
+        assert document.metadata.processing_status == ProcessingStatus.COMPLETED
+        assert document.metadata.file_size > 0
+        assert document.metadata.processing_time_seconds is not None
+        assert document.metadata.processing_time_seconds > 0
+
+        # Check word count and paragraph count
+        assert document.metadata.word_count > 0
+        assert document.metadata.total_rows > 0  # total_rows = paragraph count
+        assert document.metadata.total_chunks > 0
+        assert len(document.chunks) == document.metadata.total_chunks
+
+        # Check document properties
+        assert document.chunk_count == len(document.chunks)
+        assert document.is_processed is True
+        assert len(document.get_chunks_with_embeddings()) == 0  # No embeddings yet
+
+    def test_chunk_content_format(self):
+        """Test that chunk content follows expected natural language format"""
+        document = self.processor.process(self.sample_file)
+
+        # Should have at least one chunk
+        assert len(document.chunks) > 0
+
+        # Check first chunk content
+        first_chunk = document.chunks[0]
+        assert first_chunk.content
+        assert isinstance(first_chunk.content, str)
+        assert len(first_chunk.content.strip()) > 0
+
+        # Check chunk metadata
+        assert first_chunk.chunk_id
+        assert first_chunk.source == "company_handbook.docx"
+        assert first_chunk.chunk_index >= 0
+        assert isinstance(first_chunk.metadata, dict)
+
+        # Word-specific metadata
+        assert "paragraph_indices" in first_chunk.metadata
+        assert "paragraph_types" in first_chunk.metadata
+        assert "character_count" in first_chunk.metadata
+        assert "has_headings" in first_chunk.metadata
+
+    def test_document_structure_recognition(self):
+        """Test that document structure is properly recognized"""
+        document = self.processor.process(self.sample_file)
+
+        # Collect all paragraph types and headings
+        all_types = set()
+        all_headings = set()
+
+        for chunk in document.chunks:
+            chunk_types = chunk.metadata.get("paragraph_types", [])
+            chunk_headings = chunk.metadata.get("section_headings", [])
+            all_types.update(chunk_types)
+            all_headings.update(chunk_headings)
+
+        # Should recognize different paragraph types
+        # (exact types depend on sample document content)
+        assert len(all_types) > 1  # Should have multiple types
+        assert len(all_headings) > 1  # Should have multiple headings
+
+        # Check for expected structure elements
+        has_headings = any("heading" in ptype for ptype in all_types)
+        assert has_headings  # Should detect headings
+
+    def test_chunking_respects_max_size(self):
+        """Test that chunks respect the maximum chunk size configuration"""
+        config = ProcessingConfig(max_chunk_size=500)  # Small chunks
+        processor = WordProcessor(config)
+
+        document = processor.process(self.sample_file)
+
+        # All chunks should be within the size limit
+        for chunk in document.chunks:
+            assert len(chunk.content) <= config.max_chunk_size
+            assert len(chunk.content) > 0  # Should not be empty
+
+    def test_heading_aware_chunking(self):
+        """Test that chunking prefers to start new chunks with headings"""
+        document = self.processor.process(self.sample_file)
+
+        # Check that chunks starting with headings are common
+        chunks_with_headings = 0
+        for chunk in document.chunks:
+            paragraph_types = chunk.metadata.get("paragraph_types", [])
+            if any(ptype.startswith("heading") for ptype in paragraph_types):
+                chunks_with_headings += 1
+
+        # Should have some chunks with headings (depends on document structure)
+        assert chunks_with_headings > 0
+
+
+class TestWordProcessorWithMockData:
+    """Test WordProcessor with controlled mock data"""
+
+    def setup_method(self):
+        """Set up test processor"""
+        self.processor = WordProcessor()
+
+    def create_test_word_file(self, tmp_path, paragraphs_data):
+        """
+        Helper to create test Word files
+
+        Args:
+            tmp_path: pytest temporary path
+            paragraphs_data: List of (text, style_name) tuples
+        """
+        word_file = tmp_path / "test.docx"
+        doc = Document()
+
+        for text, style_name in paragraphs_data:
+            paragraph = doc.add_paragraph(text)
+            if style_name:
+                paragraph.style = style_name
+
+        doc.save(word_file)
+        return word_file
+
+    def test_process_simple_document(self, tmp_path):
+        """Test processing simple document with mixed paragraph types"""
+        paragraphs = [
+            ("Test Document Title", "Title"),
+            ("Introduction", "Heading 1"),
+            ("This is a simple introduction paragraph.", "Normal"),
+            ("Key points to remember:", "Normal"),
+            ("First important point", "List Bullet"),
+            ("Second important point", "List Bullet"),
+            ("Conclusion", "Heading 1"),
+            ("This concludes our test document.", "Normal")
+        ]
+
+        word_file = self.create_test_word_file(tmp_path, paragraphs)
+        document = self.processor.process(word_file)
+
+        assert document.metadata.processing_status == ProcessingStatus.COMPLETED
+        assert document.metadata.total_rows > 0  # Should have paragraphs
+        assert len(document.chunks) > 0
+
+        # Check that content includes expected elements
+        all_content = " ".join(chunk.content for chunk in document.chunks)
+        assert "introduction" in all_content.lower()
+        assert "conclusion" in all_content.lower()
+
+    def test_process_document_with_only_headings(self, tmp_path):
+        """Test processing document with only heading paragraphs"""
+        paragraphs = [
+            ("Chapter 1", "Heading 1"),
+            ("Section 1.1", "Heading 2"),
+            ("Section 1.2", "Heading 2"),
+            ("Chapter 2", "Heading 1")
+        ]
+
+        word_file = self.create_test_word_file(tmp_path, paragraphs)
+        document = self.processor.process(word_file)
+
+        assert document.metadata.processing_status == ProcessingStatus.COMPLETED
+        assert len(document.chunks) > 0
+
+        # All chunks should have heading content
+        for chunk in document.chunks:
+            assert any(ptype.startswith("heading") for ptype in chunk.metadata["paragraph_types"])
+
+    def test_process_empty_paragraphs_handling(self, tmp_path):
+        """Test handling of empty paragraphs based on configuration"""
+        paragraphs = [
+            ("Valid content", "Normal"),
+            ("", "Normal"),  # Empty paragraph
+            ("More valid content", "Normal"),
+            ("   ", "Normal"),  # Whitespace only
+            ("Final content", "Normal")
+        ]
+
+        # Test with skip_empty_paragraphs=True (default)
+        word_file = self.create_test_word_file(tmp_path, paragraphs)
+        document = self.processor.process(word_file)
+
+        assert document.metadata.processing_status == ProcessingStatus.COMPLETED
+
+        # Should skip empty paragraphs
+        all_content = " ".join(chunk.content for chunk in document.chunks)
+        assert "valid content" in all_content.lower()
+        assert "final content" in all_content.lower()
+
+    def test_chunking_with_custom_config(self, tmp_path):
+        """Test chunking behavior with custom configuration"""
+        # Create document with long paragraphs that will need multiple chunks
+        long_paragraphs = [
+            ("Introduction", "Heading 1"),
+            (
+            "This is a very long paragraph with lots of text that should exceed our chunk size limit. " * 10, "Normal"),
+            ("Another Section", "Heading 1"),
+            ("Another very long paragraph that will also need to be chunked appropriately. " * 10, "Normal")
+        ]
+
+        word_file = self.create_test_word_file(tmp_path, long_paragraphs)
+
+        # Test with small chunk size
+        config = ProcessingConfig(max_chunk_size=200)
+        processor = WordProcessor(config)
+
+        document = processor.process(word_file)
+
+        # Should create multiple small chunks
+        assert len(document.chunks) > 1
+        for chunk in document.chunks:
+            assert len(chunk.content) <= 200
+
+
+class TestWordProcessorErrorHandling:
+    """Test error handling and edge cases"""
+
+    def setup_method(self):
+        """Set up test processor"""
+        self.processor = WordProcessor()
+
+    def test_corrupted_word_file(self, tmp_path):
+        """Test handling of corrupted Word file"""
+        fake_docx = tmp_path / "corrupted.docx"
+        fake_docx.write_text("This is not a real Word file")
+
+        document = self.processor.process(fake_docx)
+
+        # Should return failed document, not crash
+        assert document.metadata.processing_status == ProcessingStatus.FAILED
+        assert document.metadata.error_message is not None
+        assert len(document.chunks) == 0
+
+    @patch('docx.Document')
+    def test_docx_library_error(self, mock_document, tmp_path):
+        """Test handling of python-docx library errors"""
+        mock_document.side_effect = Exception("Simulated docx error")
+
+        # Create a real file to pass validation
+        word_file = tmp_path / "test.docx"
+        doc = Document()
+        doc.add_paragraph("Test")
+        doc.save(word_file)
+
+        document = self.processor.process(word_file)
+
+        assert document.metadata.processing_status == ProcessingStatus.FAILED
+        assert "Simulated docx error" in document.metadata.error_message
+
+    def test_permission_denied(self):
+        """Test handling of permission denied errors"""
+        with patch('pathlib.Path.exists', return_value=True):
+            with patch('pathlib.Path.is_file', return_value=True):
+                with patch('pathlib.Path.stat') as mock_stat:
+                    mock_stat.return_value.st_size = 1024
+                    with patch('builtins.open', side_effect=PermissionError("Permission denied")):
+                        document = self.processor.process("protected.docx")
+                        assert document.metadata.processing_status == ProcessingStatus.FAILED
+                        assert "Permission denied" in document.metadata.error_message
+                        assert len(document.chunks) == 0
+
+
+class TestWordProcessorParagraphConversion:
+    """Test the paragraph-to-text conversion logic specifically"""
+
+    def setup_method(self):
+        """Set up test processor"""
+        self.processor = WordProcessor()
+
+    def test_convert_heading_paragraph(self):
+        """Test converting heading paragraphs"""
+        text = self.processor._convert_paragraph_to_text(
+            "Company Overview", "heading_1", ""
+        )
+
+        assert "Section 1" in text
+        assert "Company Overview" in text
+
+    def test_convert_normal_paragraph_with_heading_context(self):
+        """Test converting normal paragraph with heading context"""
+        text = self.processor._convert_paragraph_to_text(
+            "TechCorp is a leading technology company.",
+            "normal",
+            "Company Overview"
+        )
+
+        assert "Under Company Overview" in text
+        assert "TechCorp is a leading technology company" in text
+
+    def test_convert_list_item(self):
+        """Test converting list item paragraphs"""
+        text = self.processor._convert_paragraph_to_text(
+            "Health insurance with 90% coverage",
+            "list_item",
+            "Employee Benefits"
+        )
+
+        assert "Under Employee Benefits" in text
+        assert "item:" in text
+        assert "Health insurance" in text
+
+    def test_convert_quote_paragraph(self):
+        """Test converting quote paragraphs"""
+        text = self.processor._convert_paragraph_to_text(
+            "Quality is not an act, but a habit.",
+            "quote",
+            "Company Philosophy"
+        )
+
+        assert "Quote in Company Philosophy" in text
+        assert "Quality is not an act" in text
+
+    def test_convert_title_paragraph(self):
+        """Test converting title paragraphs"""
+        text = self.processor._convert_paragraph_to_text(
+            "Employee Handbook",
+            "title",
+            ""
+        )
+
+        assert "Document title:" in text
+        assert "Employee Handbook" in text
+
+    def test_convert_empty_paragraph(self):
+        """Test converting empty paragraphs"""
+        text = self.processor._convert_paragraph_to_text("", "normal", "Section")
+
+        assert text == ""
+
+    def test_convert_whitespace_only_paragraph(self):
+        """Test converting paragraphs with only whitespace"""
+        text = self.processor._convert_paragraph_to_text("   \n\t   ", "normal", "Section")
+
+        assert text == ""
+
+
+class TestWordProcessorGetParagraphType:
+    """Test paragraph type detection"""
+
+    def setup_method(self):
+        """Set up test processor"""
+        self.processor = WordProcessor()
+
+    def create_mock_paragraph(self, style_name):
+        """Create a mock paragraph with given style"""
+        mock_paragraph = MagicMock()
+        mock_paragraph.style.name = style_name
+        return mock_paragraph
+
+    def test_detect_heading_types(self):
+        """Test detection of different heading levels"""
+        test_cases = [
+            ("Heading 1", "heading_1"),
+            ("Heading 2", "heading_2"),
+            ("Heading 3", "heading_3"),
+            ("Heading 4", "heading_other"),
+        ]
+
+        for style_name, expected_type in test_cases:
+            mock_para = self.create_mock_paragraph(style_name)
+            result = self.processor._get_paragraph_type(mock_para)
+            assert result == expected_type
+
+    def test_detect_list_types(self):
+        """Test detection of list paragraph types"""
+        list_styles = ["List Bullet", "List Number", "List Paragraph"]
+
+        for style_name in list_styles:
+            mock_para = self.create_mock_paragraph(style_name)
+            result = self.processor._get_paragraph_type(mock_para)
+            assert result == "list_item"
+
+    def test_detect_special_types(self):
+        """Test detection of special paragraph types"""
+        test_cases = [
+            ("Quote", "quote"),
+            ("Title", "title"),
+            ("Normal", "normal"),
+            ("Body Text", "normal"),
+        ]
+
+        for style_name, expected_type in test_cases:
+            mock_para = self.create_mock_paragraph(style_name)
+            result = self.processor._get_paragraph_type(mock_para)
+            assert result == expected_type
+
+
+if __name__ == "__main__":
+    # Run tests with: python -m pytest tests/document_processor/test_word_processor.py -v
+    pytest.main([__file__, "-v"])

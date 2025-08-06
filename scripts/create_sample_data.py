@@ -48,7 +48,7 @@ def create_sample_excel():
     df = pd.DataFrame(employees)
 
     # Create Excel file with formatting
-    with pd.ExcelWriter('data/sample_employees.xlsx', engine='openpyxl') as writer:
+    with pd.ExcelWriter('../data/sample_employees.xlsx', engine='openpyxl') as writer:
         df.to_excel(writer, sheet_name='Employees', index=False)
 
         # Add a second sheet with department summary
@@ -150,7 +150,7 @@ def create_sample_word_doc():
 
 def main():
     # Create data directory if it doesn't exist
-    os.makedirs('data', exist_ok=True)
+    os.makedirs('../data', exist_ok=True)
 
     # Create sample files
     create_sample_excel()

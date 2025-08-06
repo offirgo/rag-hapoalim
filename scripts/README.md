@@ -1,0 +1,1 @@
+these should be run from the root folder if you want to run them

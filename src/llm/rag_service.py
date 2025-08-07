@@ -1,10 +1,9 @@
 import logging
 import time
-from typing import Dict, Any, List, Optional, Union
+from typing import Dict, Any, List, Optional
 
-from src.vector_stores.base import BaseVectorStore, SearchResult, VectorQuery
+from src.vector_stores.base import BaseVectorStore, VectorQuery
 from src.llm.base import BaseLLM
-from src.models.document import DocumentChunk
 
 logger = logging.getLogger(__name__)
 

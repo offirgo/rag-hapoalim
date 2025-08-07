@@ -1,8 +1,7 @@
-# src/llm/ollama.py
-import json
+
 import logging
 import requests
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any
 
 from .base import BaseLLM, LLMError
 

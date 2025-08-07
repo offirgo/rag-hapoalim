@@ -2,7 +2,7 @@
 Tests for document models
 Tests our Pydantic models to ensure they work correctly
 """
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 from datetime import datetime

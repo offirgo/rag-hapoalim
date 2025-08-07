@@ -1,13 +1,10 @@
-# api.py
 import logging
 import os
-import glob
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from enum import Enum
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Body
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 

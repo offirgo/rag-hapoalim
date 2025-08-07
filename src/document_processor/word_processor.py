@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import List, Union, Tuple
 
 from docx import Document
-from docx.shared import Inches
 from docx.oxml.exceptions import InvalidXmlError
 from docx.opc.exceptions import PackageNotFoundError
 

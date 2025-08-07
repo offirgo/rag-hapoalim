@@ -5,7 +5,6 @@ Uses Facebook AI Similarity Search for efficient vector storage and retrieval
 
 import logging
 import json
-import pickle
 import time
 from pathlib import Path
 from typing import List, Dict, Any, Union, Optional

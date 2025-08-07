@@ -69,7 +69,7 @@ If you want to use a real LLM instead of the test mode:
 ```
 
 The API will be available at http://localhost:8000, and the interactive documentation at http://localhost:8000/docs.
-
+The repo includes two files and their index, you can add more if you please via the upload endpoint
 ### Using the Interactive API Documentation
 
 Open http://localhost:8000/docs in your browser

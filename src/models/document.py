@@ -3,9 +3,8 @@ Pydantic models for document processing
 Defines the data structures used throughout the RAG system
 """
 
-from typing import List, Dict, Optional, Union, Any
+from typing import List, Dict, Optional, Any
 from enum import Enum
-from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
 from datetime import datetime
 

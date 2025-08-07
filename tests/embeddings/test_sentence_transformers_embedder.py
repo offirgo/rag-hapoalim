@@ -4,7 +4,7 @@ Comprehensive test suite with mocked dependencies to avoid requiring actual mode
 """
 
 import pytest
-from unittest.mock import patch, MagicMock, Mock
+from unittest.mock import patch, MagicMock
 import numpy as np
 
 from src.models.document import DocumentChunk

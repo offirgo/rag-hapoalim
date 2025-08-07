@@ -4,9 +4,8 @@ Comprehensive test suite covering functionality, error handling, and edge cases
 """
 
 import pytest
-import tempfile
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 import pandas as pd
 
 from src.models.document import (
@@ -15,7 +14,6 @@ from src.models.document import (
     DocumentType
 )
 from src.document_processor import ExcelProcessor
-from src.document_processor.excel_processor import ExcelProcessingError
 
 
 class TestExcelProcessorInitialization:

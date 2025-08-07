@@ -4,11 +4,9 @@ Comprehensive test suite covering functionality, error handling, and edge cases
 """
 
 import pytest
-import tempfile
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 from docx import Document
-from docx.text.paragraph import Paragraph
 
 from src.models.document import (
     ProcessingConfig,
@@ -16,7 +14,6 @@ from src.models.document import (
     DocumentType
 )
 from src.document_processor import WordProcessor
-from src.document_processor.word_processor import WordProcessingError
 
 
 class TestWordProcessorInitialization:

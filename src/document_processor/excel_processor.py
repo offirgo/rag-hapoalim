@@ -6,10 +6,9 @@ Converts Excel files to ProcessedDocument objects with text chunks
 import logging
 import time
 from pathlib import Path
-from typing import Dict, List, Union, Any
+from typing import Dict, List
 
 import pandas as pd
-from pandas.errors import EmptyDataError, ParserError
 
 from src.models.document import (
     DocumentType,

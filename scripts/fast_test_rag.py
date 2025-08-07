@@ -6,7 +6,7 @@ from pathlib import Path
 from src.embeddings.sentence_transformers_embedder import SentenceTransformersEmbedder
 from src.vector_stores.faiss_store import FaissVectorStore
 from src.llm.echo import EchoLLM
-from src.llm.service import RAGService
+from src.llm.rag_service import RAGService
 
 # Configure logging
 logging.basicConfig(

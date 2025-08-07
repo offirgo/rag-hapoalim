@@ -2,6 +2,7 @@
 Tests for document models
 Tests our Pydantic models to ensure they work correctly
 """
+from unittest.mock import patch, MagicMock
 
 import pytest
 from datetime import datetime
@@ -249,6 +250,270 @@ class TestProcessingConfig:
         with pytest.raises(ValidationError):
             ProcessingConfig(chunk_overlap=-10)
 
+
+class TestProcessedDocumentEmbeddingIntegration:
+    """Test ProcessedDocument integration with embedding system"""
+
+    def setup_method(self):
+        """Set up test documents with and without embeddings"""
+        # Create sample chunks
+        self.chunks_no_embeddings = [
+            DocumentChunk(
+                chunk_id="chunk_001",
+                content="First chunk content",
+                source="test.docx",
+                chunk_index=0,
+                metadata={"section": "intro"}
+            ),
+            DocumentChunk(
+                chunk_id="chunk_002",
+                content="Second chunk content",
+                source="test.docx",
+                chunk_index=1,
+                metadata={"section": "body"}
+            )
+        ]
+
+        self.chunks_with_embeddings = [
+            DocumentChunk(
+                chunk_id="chunk_001",
+                content="First chunk content",
+                source="test.docx",
+                chunk_index=0,
+                metadata={"section": "intro"},
+                embedding=[0.1, 0.2, 0.3]
+            ),
+            DocumentChunk(
+                chunk_id="chunk_002",
+                content="Second chunk content",
+                source="test.docx",
+                chunk_index=1,
+                metadata={"section": "body"},
+                embedding=None  # Partial embeddings
+            )
+        ]
+
+    def test_has_embeddings_property_false(self):
+        """Test has_embeddings property when no embeddings exist"""
+        metadata = DocumentMetadata(
+            filename="test.docx",
+            document_type=DocumentType.WORD,
+            file_size=1024,
+            processing_status=ProcessingStatus.COMPLETED
+        )
+
+        doc = ProcessedDocument(metadata=metadata, chunks=self.chunks_no_embeddings)
+
+        assert doc.has_embeddings is False
+
+    def test_has_embeddings_property_true(self):
+        """Test has_embeddings property when some embeddings exist"""
+        metadata = DocumentMetadata(
+            filename="test.docx",
+            document_type=DocumentType.WORD,
+            file_size=1024,
+            processing_status=ProcessingStatus.COMPLETED
+        )
+
+        doc = ProcessedDocument(metadata=metadata, chunks=self.chunks_with_embeddings)
+
+        assert doc.has_embeddings is True  # At least one chunk has embedding
+
+    def test_embedding_completion_rate_zero(self):
+        """Test completion rate when no embeddings exist"""
+        metadata = DocumentMetadata(
+            filename="test.docx",
+            document_type=DocumentType.WORD,
+            file_size=1024,
+            processing_status=ProcessingStatus.COMPLETED
+        )
+
+        doc = ProcessedDocument(metadata=metadata, chunks=self.chunks_no_embeddings)
+
+        assert doc.embedding_completion_rate == 0.0
+
+    def test_embedding_completion_rate_partial(self):
+        """Test completion rate when some embeddings exist"""
+        metadata = DocumentMetadata(
+            filename="test.docx",
+            document_type=DocumentType.WORD,
+            file_size=1024,
+            processing_status=ProcessingStatus.COMPLETED
+        )
+
+        doc = ProcessedDocument(metadata=metadata, chunks=self.chunks_with_embeddings)
+
+        assert doc.embedding_completion_rate == 0.5  # 1 out of 2 chunks has embedding
+
+    def test_embedding_completion_rate_empty_document(self):
+        """Test completion rate for document with no chunks"""
+        metadata = DocumentMetadata(
+            filename="test.docx",
+            document_type=DocumentType.WORD,
+            file_size=1024,
+            processing_status=ProcessingStatus.COMPLETED
+        )
+
+        doc = ProcessedDocument(metadata=metadata, chunks=[])
+
+        assert doc.embedding_completion_rate == 0.0
+
+    def test_get_embedding_stats(self):
+        """Test embedding statistics method"""
+        metadata = DocumentMetadata(
+            filename="test.docx",
+            document_type=DocumentType.WORD,
+            file_size=1024,
+            processing_status=ProcessingStatus.COMPLETED
+        )
+
+        doc = ProcessedDocument(metadata=metadata, chunks=self.chunks_with_embeddings)
+
+        stats = doc.get_embedding_stats()
+
+        assert stats["total_chunks"] == 2
+        assert stats["embedded_chunks"] == 1
+        assert stats["missing_embeddings"] == 1
+        assert stats["completion_rate"] == 0.5
+        assert stats["has_embeddings"] is True
+
+    def test_generate_embeddings_success(self, mock_embedder):
+        """Test successful embedding generation"""
+        # Mock the embed_chunks method to return chunks with embeddings
+        mock_embedded_chunks = [
+            DocumentChunk(
+                chunk_id="chunk_001",
+                content="First chunk content",
+                source="test.docx",
+                chunk_index=0,
+                metadata={"section": "intro"},
+                embedding=[0.1, 0.2, 0.3]
+            ),
+            DocumentChunk(
+                chunk_id="chunk_002",
+                content="Second chunk content",
+                source="test.docx",
+                chunk_index=1,
+                metadata={"section": "body"},
+                embedding=[0.4, 0.5, 0.6]
+            )
+        ]
+
+        mock_embedder.embed_chunks.return_value = mock_embedded_chunks
+
+        # Create document and generate embeddings
+        metadata = DocumentMetadata(
+            filename="test.docx",
+            document_type=DocumentType.WORD,
+            file_size=1024,
+            processing_status=ProcessingStatus.COMPLETED
+        )
+
+        doc = ProcessedDocument(metadata=metadata, chunks=self.chunks_no_embeddings)
+
+        # Generate embeddings
+        embedded_doc = doc.generate_embeddings(mock_embedder)
+
+        # Verify results
+        assert embedded_doc is not doc  # Should return new document
+        assert len(embedded_doc.chunks) == 2
+        assert embedded_doc.chunks[0].embedding == [0.1, 0.2, 0.3]
+        assert embedded_doc.chunks[1].embedding == [0.4, 0.5, 0.6]
+        assert embedded_doc.embedding_completion_rate == 1.0
+
+        # Verify embedder was called correctly
+        mock_embedder.embed_chunks.assert_called_once_with(self.chunks_no_embeddings)
+
+    def test_generate_embeddings_invalid_embedder(self):
+        """Test error handling with invalid embedder type"""
+        metadata = DocumentMetadata(
+            filename="test.docx",
+            document_type=DocumentType.WORD,
+            file_size=1024,
+            processing_status=ProcessingStatus.COMPLETED
+        )
+
+        doc = ProcessedDocument(metadata=metadata, chunks=self.chunks_no_embeddings)
+
+        # Try with invalid embedder
+        with pytest.raises(TypeError, match="embedder must be an instance of BaseEmbedder"):
+            doc.generate_embeddings("not_an_embedder")
+
+    def test_generate_embeddings_failed_document(self, mock_embedder):
+        """Test error handling with failed document processing"""
+        metadata = DocumentMetadata(
+            filename="test.docx",
+            document_type=DocumentType.WORD,
+            file_size=1024,
+            processing_status=ProcessingStatus.FAILED  # Failed processing
+        )
+
+        doc = ProcessedDocument(metadata=metadata, chunks=self.chunks_no_embeddings)
+
+
+        with pytest.raises(ValueError, match="Cannot generate embeddings for failed document"):
+            doc.generate_embeddings(mock_embedder)
+
+    def test_with_embeddings_fluent_api(self, mock_embedder):
+        """Test fluent API for embedding generation"""
+        mock_embedder.embed_chunks.return_value = self.chunks_with_embeddings
+
+        metadata = DocumentMetadata(
+            filename="test.docx",
+            document_type=DocumentType.WORD,
+            file_size=1024,
+            processing_status=ProcessingStatus.COMPLETED
+        )
+
+        doc = ProcessedDocument(metadata=metadata, chunks=self.chunks_no_embeddings)
+
+        # Test fluent API
+        embedded_doc = doc.with_embeddings(mock_embedder)
+
+        assert embedded_doc is not doc
+        assert embedded_doc.has_embeddings is True
+        mock_embedder.embed_chunks.assert_called_once()
+
+    def test_generate_embeddings_empty_document(self, mock_embedder):
+        """Test embedding generation with empty document"""
+
+
+        metadata = DocumentMetadata(
+            filename="test.docx",
+            document_type=DocumentType.WORD,
+            file_size=1024,
+            processing_status=ProcessingStatus.COMPLETED
+        )
+
+        doc = ProcessedDocument(metadata=metadata, chunks=[])
+
+        # Generate embeddings for empty document
+        embedded_doc = doc.generate_embeddings(mock_embedder)
+
+        assert len(embedded_doc.chunks) == 0
+        assert embedded_doc.embedding_completion_rate == 0.0
+        # Should not call embedder for empty document
+        mock_embedder.embed_chunks.assert_not_called()
+
+
+@pytest.fixture
+def mock_embedder():
+    """Create a mock embedder that properly inherits from BaseEmbedder"""
+    from src.embeddings.base import BaseEmbedder
+
+    class MockEmbedder(BaseEmbedder):
+        def embed_text(self, text: str):
+            return [0.1, 0.2, 0.3]
+
+        def get_embedding_dimension(self):
+            return 3
+
+        def get_model_info(self):
+            return {"provider": "mock", "model_name": "test"}
+
+    mock = MockEmbedder()
+    mock.embed_chunks = MagicMock()  # Mock the method we actually care about
+    return mock
 
 # Example of how to use these models (this won't run as a test)
 def example_usage():

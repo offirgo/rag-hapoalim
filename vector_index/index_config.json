@@ -1,0 +1,29 @@
+{
+  "embedding_dimension": 384,
+  "index_type": "flat",
+  "chunk_id_to_position": {
+    "company_handbook_para_000": 0,
+    "company_handbook_para_001": 1,
+    "company_handbook_para_002": 2,
+    "company_handbook_para_003": 3,
+    "company_handbook_para_004": 4,
+    "company_handbook_para_005": 5,
+    "company_handbook_para_006": 6,
+    "company_handbook_para_007": 7,
+    "company_handbook_para_008": 8,
+    "company_handbook_para_009": 9,
+    "company_handbook_para_010": 10,
+    "company_handbook_para_011": 11,
+    "sample_employees_Employees_000": 12,
+    "sample_employees_Employees_001": 13,
+    "sample_employees_Department_Summary_000": 14
+  },
+  "next_position": 15,
+  "stats": {
+    "documents_added": 2,
+    "chunks_indexed": 15,
+    "total_searches": 0,
+    "last_search_time": null
+  },
+  "created_at": 1754562656.305126
+}

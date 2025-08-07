@@ -44,11 +44,13 @@ venv.bak/
 .AppleDouble
 .LSOverride
 
-# Project specific
-# Vector database files
-vector_store/
+vector_db/
+faiss_indexes/
+# Only ignore the data files, not the Python modules
 *.faiss
+*.bin
 *.pkl
+*.index
 
 # Model cache (sentence-transformers)
 .cache/

@@ -34,6 +34,8 @@ class QuestionRequest(BaseModel):
     top_k: Optional[int] = Field(3, description="Number of chunks to retrieve")
     min_score: Optional[float] = Field(0.5, description="Minimum similarity score")
     filters: Optional[Dict[str, Any]] = Field(None, description="Optional filters")
+    llm_type: Optional[str] = Field("tinyllama", description="LLM to use: 'echo' or 'tinyllama'")
+
 
 
 class AnswerResponse(BaseModel):
@@ -56,7 +58,7 @@ INDEX_PATH = os.environ.get("RAG_INDEX_PATH", str(PROJECT_ROOT / "vector_index")
 DATA_DIR = os.environ.get("RAG_DATA_DIR", str(PROJECT_ROOT / "data"))
 
 LLM_TYPE = os.environ.get("RAG_LLM_TYPE", "echo")  # 'echo' or 'ollama'
-OLLAMA_MODEL = os.environ.get("RAG_OLLAMA_MODEL", "llama3")
+OLLAMA_MODEL = os.environ.get("RAG_OLLAMA_MODEL", "tinyllama")
 
 # Create upload directory if it doesn't exist
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -113,7 +115,19 @@ rag_service = RAGService(
         "default_min_score": 0.5
     }
 )
-
+def get_llm(llm_type: str):
+    """Get an LLM instance based on the specified type"""
+    if llm_type.lower() == "echo":
+        return EchoLLM()
+    elif llm_type.lower() == "tinyllama":
+        try:
+            return OllamaLLM(model="tinyllama")
+        except LLMError as e:
+            logger.error(f"Failed to initialize Ollama LLM: {e}. Falling back to EchoLLM.")
+            return EchoLLM()
+    else:
+        logger.warning(f"Unknown LLM type: {llm_type}. Using tinyllama.")
+        return OllamaLLM(model="tinyllama")
 
 # API endpoints
 @app.get("/", response_model=Dict[str, str])
@@ -137,12 +151,27 @@ async def get_system_info():
 async def answer_question(request: QuestionRequest):
     """Answer a question using RAG"""
     try:
-        result = rag_service.answer(
+        # Get the appropriate LLM based on the request
+        llm = get_llm(request.llm_type)
+
+        # Create a RAG service with this LLM
+        temp_rag_service = RAGService(
+            vector_store=vector_store,
+            llm=llm,
+            config={
+                "default_top_k": 3,
+                "default_min_score": 0.5
+            }
+        )
+
+        # Generate answer
+        result = temp_rag_service.answer(
             query=request.question,
             top_k=request.top_k,
             min_score=request.min_score,
             filters=request.filters
         )
+
         return result
     except Exception as e:
         logger.error(f"Error answering question: {e}")

@@ -43,9 +43,9 @@ def display_ollama_instructions():
     print("=" * 80)
     print("To use real LLM capabilities, please install Ollama:")
     print("1. Visit https://ollama.ai/ and download the installer for your OS")
-    print("2. Run the installer and follow the instructions")
+    print("2. Brew install ollama")
     print("3. Start Ollama: ollama serve")
-    print("4. Pull a model: ollama pull llama3")
+    print("4. in a new terminal Pull a model: ollama pull tinyllama")
     print("\nFor now, using EchoLLM (test-only implementation)")
     print("=" * 80 + "\n")
 
@@ -54,8 +54,8 @@ def main():
     parser = argparse.ArgumentParser(description="Test RAG system with Ollama")
     parser.add_argument("--index", type=str, default="vector_index",
                         help="Path to vector index (default: vector_index)")
-    parser.add_argument("--model", type=str, default="llama3",
-                        help="Ollama model to use (default: llama3)")
+    parser.add_argument("--model", type=str, default="tinyllama",
+                        help="Ollama model to use (default: tinyllama)")
     parser.add_argument("--query", type=str, help="Test query (if not provided, will prompt)")
     args = parser.parse_args()
 

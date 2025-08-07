@@ -12,12 +12,12 @@ class TestOllamaLLM(unittest.TestCase):
         # Mock a successful response
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {"models": [{"name": "llama3"}]}
+        mock_response.json.return_value = {"models": [{"name": "tinyllama"}]}
         mock_get.return_value = mock_response
 
         # Should not raise an exception
-        llm = OllamaLLM(model="llama3")
-        self.assertEqual(llm.model, "llama3")
+        llm = OllamaLLM(model="tinyllama")
+        self.assertEqual(llm.model, "tinyllama")
 
     @patch('requests.get')
     def test_check_availability_model_not_found(self, mock_get):
@@ -29,7 +29,7 @@ class TestOllamaLLM(unittest.TestCase):
 
         # Should warn but not raise an exception
         with self.assertLogs(level='WARNING') as cm:
-            llm = OllamaLLM(model="llama3")
+            llm = OllamaLLM(model="tinyllama")
             self.assertIn("not found in available models", cm.output[0])
 
     @patch('requests.get')
@@ -86,5 +86,5 @@ class TestOllamaLLM(unittest.TestCase):
         with patch.object(OllamaLLM, '_check_availability'):
             llm = OllamaLLM()
             info = llm.get_model_info()
-            self.assertEqual(info["model"], "llama3")
+            self.assertEqual(info["model"], "tinyllama")
             self.assertEqual(info["parameter_size"], "7B")

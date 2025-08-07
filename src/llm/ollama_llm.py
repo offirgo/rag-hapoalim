@@ -19,7 +19,7 @@ class OllamaLLM(BaseLLM):
 
     def __init__(
             self,
-            model: str = "llama3",
+            model: str = "tinyllama",
             base_url: str = "http://localhost:11434",
             temperature: float = 0.7,
             max_tokens: int = 1024

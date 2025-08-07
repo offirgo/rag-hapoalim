@@ -331,27 +331,66 @@ class FaissVectorStore(BaseVectorStore):
 
         Returns:
             Number of chunks removed
-
-        Note: FAISS doesn't support efficient removal, so this is a TODO for optimization
         """
-        # TODO: Implement efficient document removal
-        # Current FAISS doesn't support removing vectors easily
-        # For now, we log the request but don't actually remove
+        # Find positions of chunks to remove
+        positions_to_remove = []
+        chunk_ids_to_remove = []
 
-        chunks_to_remove = [
-            pos for pos, meta in self._chunk_metadata.items()
-            if meta["source"] == source
-        ]
+        # Identify chunks to remove
+        for pos, meta in list(self._chunk_metadata.items()):
+            if meta.get("source") == source or meta.get("source", "").endswith(f"/{source}") or meta.get("source",
+                                                                                                         "").endswith(
+                    f"\\{source}"):
+                positions_to_remove.append(pos)
+                chunk_ids_to_remove.append(meta.get("chunk_id"))
 
-        if chunks_to_remove:
-            logger.warning(
-                f"Document removal requested for '{source}' ({len(chunks_to_remove)} chunks) "
-                "but FAISS doesn't support efficient removal. Consider rebuilding index."
-            )
-            # TODO: Implement by rebuilding index without these chunks
+        if not positions_to_remove:
+            logger.warning(f"No chunks found for document '{source}'")
+            return 0
 
-        return len(chunks_to_remove)
+        logger.info(f"Removing {len(positions_to_remove)} chunks for document '{source}'")
 
+        # Since FAISS doesn't support direct removal, we need to rebuild the index
+        # 1. Get all embeddings except those to remove
+        remaining_positions = [i for i in range(self._index.ntotal) if i not in positions_to_remove]
+
+        if not remaining_positions:
+            # If removing all chunks, just clear the index
+            self.clear()
+            return len(positions_to_remove)
+
+        # 2. Create new index
+        import faiss
+        new_index = faiss.IndexFlatIP(self.embedding_dimension)
+
+        # 3. Add remaining vectors to the new index
+        if remaining_positions:
+            vectors = self._index.reconstruct_batch(remaining_positions)
+            new_index.add(vectors)
+
+        # 4. Update metadata
+        new_metadata = {}
+        new_id_to_position = {}
+        position_map = {}  # Maps old positions to new positions
+
+        new_pos = 0
+        for old_pos in remaining_positions:
+            position_map[old_pos] = new_pos
+            new_metadata[new_pos] = self._chunk_metadata[old_pos]
+
+            # Update chunk_id to position mapping
+            chunk_id = new_metadata[new_pos]["chunk_id"]
+            new_id_to_position[chunk_id] = new_pos
+
+            new_pos += 1
+
+        # 5. Replace the index and metadata
+        self._index = new_index
+        self._chunk_metadata = new_metadata
+        self._chunk_id_to_position = new_id_to_position
+        self._next_position = new_pos
+
+        return len(positions_to_remove)
     def clear(self) -> None:
         """Remove all documents and chunks from the vector store"""
         logger.info("Clearing vector store")
@@ -521,6 +560,14 @@ class FaissVectorStore(BaseVectorStore):
         chunk_count = self.get_chunk_count()
         return f"FaissVectorStore(chunks={chunk_count}, dim={self.embedding_dimension}, type={self.index_type})"
 
+    # Add this method to src/vector_stores/faiss_store.py
+    def get_indexed_sources(self) -> set:
+        """Get a set of all source files that have been indexed"""
+        sources = set()
+        for meta in self._chunk_metadata.values():
+            if 'source' in meta:
+                sources.add(meta['source'])
+        return sources
 
 # Helper function for easy instantiation
 def create_faiss_store(embedder=None, dimension: int = 384) -> FaissVectorStore:
@@ -539,3 +586,4 @@ def create_faiss_store(embedder=None, dimension: int = 384) -> FaissVectorStore:
         embedder=embedder,
         index_type="flat"  # Best for small-medium datasets
     )
+

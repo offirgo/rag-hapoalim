@@ -20,10 +20,10 @@
   },
   "next_position": 15,
   "stats": {
-    "documents_added": 2,
-    "chunks_indexed": 15,
+    "documents_added": 4,
+    "chunks_indexed": 17,
     "total_searches": 0,
     "last_search_time": null
   },
-  "created_at": 1754562656.305126
+  "created_at": 1754573725.626262
 }

@@ -39,6 +39,9 @@ python-dotenv>=1.0.0             # Environment variable management (.env files)
 # -----------------------------------------------------------------------------
 fastapi>=0.100.0                 # Modern web framework for APIs
 uvicorn[standard]>=0.23.0        # ASGI server for running FastAPI
+python-multipart>=0.0.5
+
+
 
 # -----------------------------------------------------------------------------
 # OPTIONAL: CLOUD LLM INTEGRATION

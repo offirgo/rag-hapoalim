@@ -85,6 +85,73 @@ class ProcessedDocument(BaseModel):
         """Get only chunks that have embeddings"""
         return [chunk for chunk in self.chunks if chunk.embedding is not None]
 
+    @property
+    def has_embeddings(self) -> bool:
+        """Check if document has any embeddings generated"""
+        return len(self.get_chunks_with_embeddings()) > 0
+
+    @property
+    def embedding_completion_rate(self) -> float:
+        """Get percentage of chunks that have embeddings (0.0 to 1.0)"""
+        if not self.chunks:
+            return 0.0
+        return len(self.get_chunks_with_embeddings()) / len(self.chunks)
+
+    def generate_embeddings(self, embedder) -> "ProcessedDocument":
+        """
+        Generate embeddings for all chunks using the provided embedder
+
+        Args:
+            embedder: An instance of BaseEmbedder (e.g., SentenceTransformersEmbedder)
+
+        Returns:
+            New ProcessedDocument with embeddings populated
+        """
+        # Import here to avoid circular imports
+        from src.embeddings.base import BaseEmbedder
+
+        if not isinstance(embedder, BaseEmbedder):
+            raise TypeError("embedder must be an instance of BaseEmbedder")
+
+        if not self.is_processed:
+            raise ValueError("Cannot generate embeddings for failed document processing")
+
+        if not self.chunks:
+            return ProcessedDocument(
+                metadata=self.metadata.model_copy(),
+                chunks=[]
+            )
+
+        # Generate embeddings for all chunks
+        embedded_chunks = embedder.embed_chunks(self.chunks)
+
+        # Create new document with embedded chunks
+        return ProcessedDocument(
+            metadata=self.metadata.model_copy(),
+            chunks=embedded_chunks
+        )
+
+    def with_embeddings(self, embedder) -> "ProcessedDocument":
+        """
+        Alias for generate_embeddings() with more fluent API
+
+        Example:
+            document = processor.process("file.docx").with_embeddings(embedder)
+        """
+        return self.generate_embeddings(embedder)
+
+    def get_embedding_stats(self) -> dict:
+        """Get statistics about embeddings in this document"""
+        total_chunks = len(self.chunks)
+        embedded_chunks = len(self.get_chunks_with_embeddings())
+
+        return {
+            "total_chunks": total_chunks,
+            "embedded_chunks": embedded_chunks,
+            "missing_embeddings": total_chunks - embedded_chunks,
+            "completion_rate": self.embedding_completion_rate,
+            "has_embeddings": self.has_embeddings
+        }
 
 class ProcessingConfig(BaseModel):
     """Configuration for document processing"""

@@ -4,6 +4,7 @@ import os
 import glob
 from pathlib import Path
 from typing import List, Dict, Any, Optional
+from enum import Enum
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Body
 from fastapi.responses import JSONResponse
@@ -27,6 +28,9 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+class LLMType(str, Enum):
+    ECHO = "echo"
+    TINY_LLAMA = "tinyllama"
 
 # Define models for API requests/responses
 class QuestionRequest(BaseModel):
@@ -147,7 +151,12 @@ async def get_system_info():
     return rag_service.get_system_info()
 
 
-@app.post("/answer", response_model=AnswerResponse)
+@app.post("/answer", response_model=AnswerResponse,
+          description="""
+          **LLM Options:**
+        - **echo**: Testing mode that doesn't use a real AI model. Returns a placeholder response showing what documents were retrieved.
+        - **tinyllama**: Uses the TinyLlama AI model to generate a real answer based on the retrieved documents.
+            """)
 async def answer_question(request: QuestionRequest):
     """Answer a question using RAG"""
     try:

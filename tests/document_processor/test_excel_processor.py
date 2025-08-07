@@ -27,7 +27,7 @@ class TestExcelProcessorInitialization:
 
         assert processor.config is not None
         assert isinstance(processor.config, ProcessingConfig)
-        assert processor.config.max_chunk_size == 1000  # Default value
+        assert processor.config.max_chunk_size == 800  # Default value
         assert processor.config.chunk_overlap == 100    # Default value
 
     def test_init_with_custom_config(self):
@@ -311,7 +311,7 @@ class TestExcelProcessorWithMockData:
         excel_file = self.create_test_excel_file(tmp_path, [large_data])
 
         # Test with small chunk size
-        config = ProcessingConfig(max_chunk_size=200)
+        config = ProcessingConfig(max_chunk_size=201)
         processor = ExcelProcessor(config)
 
         document = processor.process(excel_file)

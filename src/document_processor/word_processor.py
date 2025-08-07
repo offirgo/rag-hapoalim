@@ -22,6 +22,7 @@ from src.models.document import (
     ProcessingConfig
 )
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -81,6 +82,8 @@ class WordProcessor:
 
             # Process paragraphs into chunks
             chunks = self._create_chunks_from_paragraphs(paragraphs, file_path.name)
+
+            logger.debug(f"Paragraph processing results: {len(paragraphs)} paragraphs -> {len(chunks)} chunks")
 
             # Update metadata with results
             processing_time = time.time() - start_time
@@ -233,31 +236,123 @@ class WordProcessor:
         else:
             return "normal"
 
-    def _convert_paragraph_to_text(self, para_text: str, para_type: str, current_heading: str) -> str:
+    def _split_long_paragraph(self, text: str, max_length: int) -> List[str]:
+        """
+        Split very long paragraphs into contextual chunks with overlap
+
+        DESIGN DECISION: Instead of creating single-sentence chunks, we create
+        multi-sentence chunks with overlap to preserve context for better RAG retrieval.
+        Each chunk should contain 2-3 sentences when possible for optimal context-to-precision ratio.
+
+        Args:
+            text: Text to potentially split
+            max_length: Maximum allowed length for embedding compatibility
+
+        Returns:
+            List of overlapping text segments with preserved context
+        """
+        if len(text) <= max_length:
+            return [text]
+
+        # Split at sentence boundaries (periods followed by space and capital letter)
+        import re
+        sentences = re.split(r'(?<=[.!?])\s+(?=[A-Z])', text)
+
+        if len(sentences) <= self.config.target_sentences_per_chunk:
+            # If we have few sentences, try word-level splitting as last resort
+            return self._split_at_word_boundaries(text, max_length)
+
+        segments = []
+        i = 0
+
+        while i < len(sentences):
+            # Build chunk starting from sentence i
+            current_chunk = sentences[i]
+            sentences_in_chunk = 1
+
+            # Add more sentences to reach target size or sentence count
+            j = i + 1
+            while (j < len(sentences) and
+                   sentences_in_chunk < self.config.target_sentences_per_chunk and
+                   len(current_chunk + " " + sentences[j]) <= max_length):
+                current_chunk += " " + sentences[j]
+                sentences_in_chunk += 1
+                j += 1
+
+            segments.append(current_chunk.strip())
+
+            # Move forward, but with overlap for context preservation
+            overlap_sentences = min(self.config.overlap_sentences, sentences_in_chunk - 1)
+            i = j - overlap_sentences  # Step back for overlap
+
+            # Prevent infinite loops
+            if i <= len(segments) - 1:
+                i += 1
+
+        return segments
+
+    def _split_at_word_boundaries(self, text: str, max_length: int) -> List[str]:
+        """
+        Split text at word boundaries when sentence splitting isn't sufficient
+
+        Args:
+            text: Text to split
+            max_length: Maximum segment length
+
+        Returns:
+            List of word-boundary split segments with overlap
+        """
+        words = text.split()
+        if len(words) <= 3:  # Too few words to split meaningfully
+            return [text]
+
+        segments = []
+        i = 0
+
+        while i < len(words):
+            current_segment = words[i]
+            j = i + 1
+
+            # Add words until we approach the limit
+            while j < len(words) and len(current_segment + " " + words[j]) <= max_length:
+                current_segment += " " + words[j]
+                j += 1
+
+            segments.append(current_segment)
+
+            # Move forward with word-level overlap
+            overlap_words = min(3, j - i - 1)  # Overlap 2-3 words for context
+            i = j - overlap_words
+
+            # Prevent infinite loops
+            if i <= len(segments) - 1:
+                i += 1
+
+        return segments
         """
         Convert a paragraph to enhanced natural language text
-
+        
         DESIGN DECISION: We use a naive natural language approach as a first step.
         Alternative approaches to consider with more data and performance analysis:
         - Structured document representation preserving exact formatting
         - Template-based conversion with document structure awareness
-        - Semantic paragraph classification and importance weighting
+        - Semantic paragraph classification and importance weighting  
         - Cross-reference and citation preservation for technical documents
-
+        
         Example:
             Input:
                 para_text: "TechCorp supports flexible working arrangements and remote work options."
                 para_type: "normal"
                 current_heading: "Work Schedule and Remote Work Policy"
-
+            
             Output:
                 "Under Work Schedule and Remote Work Policy: TechCorp supports flexible working arrangements and remote work options."
-
+        
         Args:
             para_text: Raw paragraph text
             para_type: Type of paragraph (heading, normal, list_item, etc.)
             current_heading: Current section heading for context
-
+            
         Returns:
             Enhanced natural language description
         """
@@ -295,23 +390,23 @@ class WordProcessor:
                 return clean_text
 
     def _create_chunks_from_paragraphs(
-            self,
-            paragraphs: List[Tuple[str, str, int, str]],
-            source: str
+        self,
+        paragraphs: List[Tuple[str, str, int, str]],
+        source: str
     ) -> List[DocumentChunk]:
         """
-        Create document chunks from paragraphs
+        Create document chunks from paragraphs with contextual overlap
 
-        NOTE: Paragraphs in Word docs have natural boundaries and context,
-        unlike tabular data. We group related paragraphs but preserve
-        section boundaries and don't overlap content.
+        DESIGN DECISION: Create chunks of 2-3 sentences (200-800 chars) with overlap
+        to optimize for RAG retrieval. Larger chunks provide better context for understanding,
+        while overlap ensures semantic continuity across chunk boundaries.
 
         Args:
             paragraphs: List of (text, type, index, current_heading) tuples
             source: Source filename
 
         Returns:
-            List of DocumentChunk objects
+            List of DocumentChunk objects with optimal size and context
         """
         chunks = []
 
@@ -320,82 +415,186 @@ class WordProcessor:
         for para_text, para_type, para_idx, current_heading in paragraphs:
             try:
                 enhanced_text = self._convert_paragraph_to_text(para_text, para_type, current_heading)
-                if enhanced_text.strip():
+                if enhanced_text and enhanced_text.strip():  # More lenient check
                     paragraph_texts.append((enhanced_text, para_type, para_idx, current_heading))
+                else:
+                    logger.debug(f"Empty enhanced text for paragraph {para_idx}: '{para_text[:50]}...'")
             except Exception as e:
-                logger.warning(f"Failed to convert paragraph {para_idx}: {e}")
-                continue
+                logger.error(f"Failed to convert paragraph {para_idx}: {e}")
+                # Include original text as fallback
+                fallback_text = para_text.strip() if para_text else f"Paragraph {para_idx}"
+                if fallback_text:
+                    paragraph_texts.append((fallback_text, para_type, para_idx, current_heading))
 
         if not paragraph_texts:
-            logger.warning(f"No valid paragraphs extracted from {source}")
-            return chunks
+            error_msg = f"No valid paragraphs extracted from {source}. Input had {len(paragraphs)} paragraphs."
+            logger.error(error_msg)
+            raise WordProcessingError(error_msg)  # Break instead of silent failure
 
-        # Group paragraphs into chunks based on max_chunk_size
-        current_chunk_text = ""
-        current_chunk_paragraphs = []
-        current_chunk_types = set()
-        current_chunk_headings = set()
-        chunk_index = 0
+        # Process paragraphs into contextual chunks
+        all_segments = []  # List of (text, metadata) for all segments
 
         for enhanced_text, para_type, para_idx, heading in paragraph_texts:
-            # Check if adding this paragraph would exceed chunk size
-            potential_chunk = current_chunk_text + "\n" + enhanced_text if current_chunk_text else enhanced_text
+            # Handle very long paragraphs by splitting them if needed
+            if self.config.enforce_embedding_limits and len(enhanced_text) > self.config.max_embedding_chars:
+                # Split the paragraph into embedding-compatible segments with overlap
+                segments = self._split_long_paragraph(enhanced_text, self.config.max_embedding_chars)
+                logger.info(f"Split long paragraph {para_idx} into {len(segments)} segments")
 
-            # Special handling for headings - prefer to start new chunks with headings
-            should_start_new_chunk = (
-                    len(potential_chunk) > self.config.max_chunk_size or
-                    (para_type.startswith("heading") and current_chunk_text)  # Start new chunk for headings
-            )
-
-            if not should_start_new_chunk:
-                # Add to current chunk
-                current_chunk_text = potential_chunk
-                current_chunk_paragraphs.append(para_idx)
-                current_chunk_types.add(para_type)
-                if heading:
-                    current_chunk_headings.add(heading)
+                for segment_idx, segment in enumerate(segments):
+                    segment_meta = {
+                        "text": segment,
+                        "para_type": para_type,
+                        "para_idx": f"{para_idx}_seg{segment_idx}",
+                        "heading": heading
+                    }
+                    all_segments.append(segment_meta)
             else:
-                # Current chunk is full or we hit a heading, finalize it
-                if current_chunk_text:
-                    chunk = self._create_chunk(
-                        content=current_chunk_text,
-                        source=source,
-                        chunk_index=chunk_index,
-                        paragraph_indices=current_chunk_paragraphs,
-                        paragraph_types=list(current_chunk_types),
-                        headings=list(current_chunk_headings)
-                    )
-                    chunks.append(chunk)
-                    chunk_index += 1
+                # Normal paragraph - add as single segment
+                segment_meta = {
+                    "text": enhanced_text,
+                    "para_type": para_type,
+                    "para_idx": para_idx,
+                    "heading": heading
+                }
+                all_segments.append(segment_meta)
 
-                # Start new chunk with current paragraph
-                current_chunk_text = enhanced_text
-                current_chunk_paragraphs = [para_idx]
-                current_chunk_types = {para_type}
-                current_chunk_headings = {heading} if heading else set()
+        logger.debug(f"Created {len(all_segments)} segments from {len(paragraph_texts)} paragraphs")
 
-        # Add final chunk if there's remaining content
-        if current_chunk_text:
-            chunk = self._create_chunk(
-                content=current_chunk_text,
-                source=source,
-                chunk_index=chunk_index,
-                paragraph_indices=current_chunk_paragraphs,
-                paragraph_types=list(current_chunk_types),
-                headings=list(current_chunk_headings)
-            )
-            chunks.append(chunk)
+        # If we have no segments, return early
+        if not all_segments:
+            logger.warning(f"No segments created from {source}")
+            return chunks
+
+        # Group segments into optimal-sized chunks with overlap
+        chunk_index = 0
+        i = 0
+
+        while i < len(all_segments):
+            # Build current chunk
+            current_chunk_text = ""
+            current_chunk_paragraphs = []
+            current_chunk_types = set()
+            current_chunk_headings = set()
+            segments_in_chunk = 0
+
+            # Add segments until we reach good chunk size
+            j = i
+            while j < len(all_segments):
+                segment = all_segments[j]
+                potential_text = current_chunk_text + "\n" + segment["text"] if current_chunk_text else segment["text"]
+
+                # Check if we should break (but always include at least one segment)
+                should_break = False
+                if segments_in_chunk > 0:  # Only break if we have at least one segment
+                    # Break if we'd exceed max chunk size
+                    if len(potential_text) > self.config.max_chunk_size:
+                        should_break = True
+
+                    # Prefer to start new chunks with headings (but only if current chunk is substantial)
+                    elif (segment["para_type"].startswith("heading") and
+                          len(current_chunk_text) >= self.config.min_chunk_size):
+                        should_break = True
+
+                if should_break:
+                    break
+
+                # Add this segment to current chunk
+                current_chunk_text = potential_text
+                current_chunk_paragraphs.append(segment["para_idx"])
+                current_chunk_types.add(segment["para_type"])
+                if segment["heading"]:
+                    current_chunk_headings.add(segment["heading"])
+
+                segments_in_chunk += 1
+                j += 1
+
+            # Create chunk if we have content
+            if current_chunk_text and current_chunk_text.strip():
+                chunk = self._create_chunk(
+                    content=current_chunk_text,
+                    source=source,
+                    chunk_index=chunk_index,
+                    paragraph_indices=current_chunk_paragraphs,
+                    paragraph_types=list(current_chunk_types),
+                    headings=list(current_chunk_headings)
+                )
+                chunks.append(chunk)
+                chunk_index += 1
+                logger.debug(f"Created chunk {chunk_index} with {segments_in_chunk} segments, {len(current_chunk_text)} chars")
+
+            # Move to next position with simple overlap
+            if j >= len(all_segments):
+                break
+
+            # Simple overlap: go back 1 segment for context (if we used more than 1)
+            overlap_amount = min(1, segments_in_chunk - 1) if segments_in_chunk > 1 else 0
+            i = j - overlap_amount
+
+            # Ensure we always make progress
+            if i <= chunk_index - 1:  # Prevent infinite loops
+                i = j
+
+        logger.info(f"Created {len(chunks)} chunks from {len(all_segments)} segments")
+
+        # Fallback: if no chunks were created but we have segments, create simple chunks
+        if not chunks and all_segments:
+            logger.warning("No chunks created with complex logic, falling back to simple chunking")
+
+            current_text = ""
+            current_paragraphs = []
+            fallback_chunk_index = 0
+
+            for segment in all_segments:
+                potential_text = current_text + "\n" + segment["text"] if current_text else segment["text"]
+
+                if len(potential_text) <= self.config.max_chunk_size:
+                    current_text = potential_text
+                    current_paragraphs.append(segment["para_idx"])
+                else:
+                    # Save current chunk if it has content
+                    if current_text.strip():
+                        fallback_chunk = self._create_chunk(
+                            content=current_text,
+                            source=source,
+                            chunk_index=fallback_chunk_index,
+                            paragraph_indices=current_paragraphs,
+                            paragraph_types=["normal"],
+                            headings=[]
+                        )
+                        chunks.append(fallback_chunk)
+                        fallback_chunk_index += 1
+
+                    # Start new chunk
+                    current_text = segment["text"]
+                    current_paragraphs = [segment["para_idx"]]
+
+            # Add final chunk
+            if current_text.strip():
+                fallback_chunk = self._create_chunk(
+                    content=current_text,
+                    source=source,
+                    chunk_index=fallback_chunk_index,
+                    paragraph_indices=current_paragraphs,
+                    paragraph_types=["normal"],
+                    headings=[]
+                )
+                chunks.append(fallback_chunk)
+
+            logger.info(f"Fallback created {len(chunks)} simple chunks")
+
+        return chunks
 
         return chunks
 
     def _create_chunk(
-            self,
-            content: str,
-            source: str,
-            chunk_index: int,
-            paragraph_indices: List[int],
-            paragraph_types: List[str],
-            headings: List[str]
+        self,
+        content: str,
+        source: str,
+        chunk_index: int,
+        paragraph_indices: List[int],
+        paragraph_types: List[str],
+        headings: List[str]
     ) -> DocumentChunk:
         """
         Create a single DocumentChunk with proper metadata
@@ -413,13 +612,20 @@ class WordProcessor:
         """
         chunk_id = f"{Path(source).stem}_para_{chunk_index:03d}"
 
+        # Count sentences for context evaluation
+        import re
+        sentence_count = len(re.findall(r'[.!?]+', content))
+
         metadata = {
             "paragraph_indices": paragraph_indices,
             "paragraph_count": len(paragraph_indices),
             "paragraph_types": paragraph_types,
             "section_headings": headings,
             "character_count": len(content),
-            "has_headings": any(ptype.startswith("heading") for ptype in paragraph_types)
+            "sentence_count": sentence_count,
+            "has_headings": any(ptype.startswith("heading") for ptype in paragraph_types),
+            "has_overlap": chunk_index > 0,  # All chunks after first may have overlap
+            "chunk_quality": "good" if self.config.min_chunk_size <= len(content) <= self.config.max_chunk_size else "size_warning"
         }
 
         return DocumentChunk(
@@ -430,11 +636,43 @@ class WordProcessor:
             metadata=metadata
         )
 
+    def _convert_paragraph_to_text(self, para_text: str, para_type: str, current_heading: str) -> str:
+        """Convert a paragraph to enhanced natural language text"""
+
+        if not para_text or not para_text.strip():
+            return ""
+
+        # Clean the text
+        clean_text = " ".join(para_text.split())  # Normalize whitespace
+
+        # Add context based on paragraph type
+        if para_type.startswith("heading"):
+            level = para_type.replace("heading_", "").replace("_", " ")
+            enhanced_text = f"Section {level}: {clean_text}"
+        elif para_type == "title":
+            enhanced_text = f"Document title: {clean_text}"
+        elif para_type == "list_item":
+            if current_heading:
+                enhanced_text = f"Under {current_heading}, item: {clean_text}"
+            else:
+                enhanced_text = f"List item: {clean_text}"
+        elif para_type == "quote":
+            if current_heading:
+                enhanced_text = f"Quote in {current_heading}: {clean_text}"
+            else:
+                enhanced_text = f"Quote: {clean_text}"
+        else:  # normal paragraphs
+            if current_heading:
+                enhanced_text = f"Under {current_heading}: {clean_text}"
+            else:
+                enhanced_text = clean_text
+
+        return enhanced_text
     def _create_document_metadata(
-            self,
-            file_path: Path,
-            doc: Document,
-            paragraphs: List[Tuple[str, str, int, str]]
+        self,
+        file_path: Path,
+        doc: Document,
+        paragraphs: List[Tuple[str, str, int, str]]
     ) -> DocumentMetadata:
         """
         Create document metadata from file and document information

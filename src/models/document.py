@@ -90,9 +90,18 @@ class ProcessingConfig(BaseModel):
     """Configuration for document processing"""
     model_config = ConfigDict(validate_assignment=True)
 
-    # Chunking parameters
-    max_chunk_size: int = Field(default=1000, ge=100, le=10000, description="Maximum characters per chunk")
+    # Chunking parameters - optimized for RAG retrieval
+    max_chunk_size: int = Field(default=800, ge=200, le=10000, description="Maximum characters per chunk")
+    min_chunk_size: int = Field(default=200, ge=50, le=5000, description="Minimum characters per chunk")
     chunk_overlap: int = Field(default=100, ge=0, description="Character overlap between chunks")
+
+    # Embedding model compatibility - common model limits
+    max_embedding_tokens: int = Field(default=512, ge=100, le=8192, description="Max tokens for embedding model")
+    chars_per_token_estimate: float = Field(default=4.0, ge=1.0, le=10.0, description="Rough chars per token estimate")
+
+    # Advanced chunking settings - optimized for context preservation
+    target_sentences_per_chunk: int = Field(default=3, ge=1, le=10, description="Target sentences per chunk for better context")
+    overlap_sentences: int = Field(default=1, ge=0, le=3, description="Number of sentences to overlap when splitting")
 
     # Excel-specific settings
     excel_row_to_text_template: str = Field(
@@ -104,8 +113,26 @@ class ProcessingConfig(BaseModel):
     # Word-specific settings
     preserve_formatting: bool = Field(default=False, description="Attempt to preserve text formatting")
     skip_empty_paragraphs: bool = Field(default=True, description="Skip empty paragraphs")
+    enforce_embedding_limits: bool = Field(default=True, description="Split chunks that exceed embedding token limits")
+
+    @property
+    def max_embedding_chars(self) -> int:
+        """Calculate approximate max characters based on token limit"""
+        return int(self.max_embedding_tokens * self.chars_per_token_estimate)
 
     def validate_config(self) -> None:
         """Validate configuration parameters"""
         if self.chunk_overlap >= self.max_chunk_size:
             raise ValueError("chunk_overlap must be less than max_chunk_size")
+
+        if self.min_chunk_size >= self.max_chunk_size:
+            raise ValueError("min_chunk_size must be less than max_chunk_size")
+
+        if self.enforce_embedding_limits and self.max_chunk_size > self.max_embedding_chars:
+            import logging
+            logging.warning(
+                f"max_chunk_size ({self.max_chunk_size}) exceeds estimated embedding limit "
+                f"({self.max_embedding_chars} chars for {self.max_embedding_tokens} tokens). "
+                f"Consider reducing max_chunk_size or increasing max_embedding_tokens."
+            )
+

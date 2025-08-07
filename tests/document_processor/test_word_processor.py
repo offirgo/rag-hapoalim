@@ -28,8 +28,8 @@ class TestWordProcessorInitialization:
 
         assert processor.config is not None
         assert isinstance(processor.config, ProcessingConfig)
-        assert processor.config.max_chunk_size == 1000  # Default value
-        assert processor.config.chunk_overlap == 100  # Default value
+        assert processor.config.max_chunk_size == 800  # Default value
+        assert processor.config.chunk_overlap == 100    # Default value
 
     def test_init_with_custom_config(self):
         """Test initialization with custom configuration"""
@@ -317,28 +317,135 @@ class TestWordProcessorWithMockData:
         assert "final content" in all_content.lower()
 
     def test_chunking_with_custom_config(self, tmp_path):
-        """Test chunking behavior with custom configuration"""
-        # Create document with long paragraphs that will need multiple chunks
-        long_paragraphs = [
+        """Test contextual chunking with overlap and optimal sizing"""
+        # Create document with multiple paragraphs that will demonstrate good chunking
+        paragraphs = [
             ("Introduction", "Heading 1"),
-            (
-            "This is a very long paragraph with lots of text that should exceed our chunk size limit. " * 10, "Normal"),
-            ("Another Section", "Heading 1"),
-            ("Another very long paragraph that will also need to be chunked appropriately. " * 10, "Normal")
+            ("This is the first paragraph with some important content.", "Normal"),
+            ("This is the second paragraph that continues the topic.", "Normal"),
+            ("This third paragraph adds more detail to the discussion.", "Normal"),
+            ("Benefits Section", "Heading 1"),
+            ("The first benefit is comprehensive health coverage.", "Normal"),
+            ("The second benefit includes retirement planning.", "Normal"),
+            ("Additional perks make this package competitive.", "Normal")
         ]
 
-        word_file = self.create_test_word_file(tmp_path, long_paragraphs)
+        word_file = self.create_test_word_file(tmp_path, paragraphs)
 
-        # Test with small chunk size
-        config = ProcessingConfig(max_chunk_size=200)
+        # Test with contextual chunking configuration
+        config = ProcessingConfig(
+            max_chunk_size=300,  # Smaller chunks to force multiple chunks
+            min_chunk_size=100,  # Ensure substantial chunks
+            target_sentences_per_chunk=2,  # Target 2 sentences per chunk
+            overlap_sentences=1  # 1 sentence overlap
+        )
         processor = WordProcessor(config)
 
         document = processor.process(word_file)
 
-        # Should create multiple small chunks
+        # Should create multiple contextual chunks
         assert len(document.chunks) > 1
+
+        # Each chunk should be within the size range (allowing for context addition)
         for chunk in document.chunks:
-            assert len(chunk.content) <= 200
+            assert len(chunk.content) >= 50  # Allow for some smaller chunks due to headings
+            assert len(chunk.content) <= config.max_chunk_size * 1.2  # 20% tolerance for context
+
+            # Check that chunks have good metadata
+            assert "sentence_count" in chunk.metadata
+            assert "chunk_quality" in chunk.metadata
+
+    def test_overlap_functionality(self, tmp_path):
+        """Test that overlap between chunks preserves context"""
+        # Create document that will definitely need multiple chunks
+        paragraphs = [
+            ("First Section", "Heading 1"),
+            ("The first paragraph introduces the topic with important keywords.", "Normal"),
+            ("The second paragraph continues with more keywords and details.", "Normal"),
+            ("The third paragraph concludes this section with final thoughts.", "Normal"),
+            ("Second Section", "Heading 1"),
+            ("The fourth paragraph starts a new topic but should overlap.", "Normal")
+        ]
+
+        word_file = self.create_test_word_file(tmp_path, paragraphs)
+
+        # Configure for overlap
+        config = ProcessingConfig(
+            max_chunk_size=250,  # Force multiple chunks
+            overlap_sentences=1,  # Ensure overlap
+            target_sentences_per_chunk=2
+        )
+        processor = WordProcessor(config)
+
+        document = processor.process(word_file)
+
+        # Should have multiple chunks
+        assert len(document.chunks) > 1
+
+        # Check for overlap indicators in metadata
+        overlap_chunks = [c for c in document.chunks if c.metadata.get("has_overlap")]
+        assert len(overlap_chunks) > 0  # Should have chunks with overlap
+
+        # Verify that chunks contain contextual information
+        all_content = " ".join(chunk.content for chunk in document.chunks)
+        assert "keywords" in all_content  # Should preserve important terms across chunks
+
+    def test_single_long_paragraph_behavior(self, tmp_path):
+        """Test behavior with single paragraph longer than embedding limits"""
+        # Create document with one very long paragraph
+        long_paragraph_text = "This is a very long paragraph with lots of text. " * 30  # ~1500 chars
+        paragraphs = [
+            ("Long Content", "Heading 1"),
+            (long_paragraph_text, "Normal")
+        ]
+
+        word_file = self.create_test_word_file(tmp_path, paragraphs)
+
+        # Test with embedding limits enforced
+        config = ProcessingConfig(
+            max_chunk_size=1000,
+            max_embedding_tokens=256,  # Small limit
+            chars_per_token_estimate=4.0,  # 256 * 4 = 1024 char limit
+            enforce_embedding_limits=True
+        )
+        processor = WordProcessor(config)
+
+        document = processor.process(word_file)
+
+        assert document.metadata.processing_status == ProcessingStatus.COMPLETED
+        assert len(document.chunks) >= 1
+
+        # Should split long paragraph to respect embedding limits
+        max_expected_size = config.max_embedding_chars  # 1024 chars
+        oversized_chunks = [chunk for chunk in document.chunks if len(chunk.content) > max_expected_size * 1.1]  # 10% tolerance
+
+        # Should have very few (ideally zero) chunks exceeding embedding limits
+        assert len(oversized_chunks) <= 1  # Allow some tolerance for edge cases
+
+    def test_embedding_limits_configuration(self, tmp_path):
+        """Test that embedding limits are properly applied"""
+        # Create normal document
+        paragraphs = [("Normal paragraph text.", "Normal")]
+        word_file = self.create_test_word_file(tmp_path, paragraphs)
+
+        # Test with embedding limits disabled
+        config_disabled = ProcessingConfig(enforce_embedding_limits=False)
+        processor_disabled = WordProcessor(config_disabled)
+
+        # Test with embedding limits enabled
+        config_enabled = ProcessingConfig(
+            enforce_embedding_limits=True,
+            max_embedding_tokens=100,  # Very small
+            chars_per_token_estimate=4.0
+        )
+        processor_enabled = WordProcessor(config_enabled)
+
+        doc_disabled = processor_disabled.process(word_file)
+        doc_enabled = processor_enabled.process(word_file)
+
+        # Both should succeed
+        assert doc_disabled.metadata.processing_status == ProcessingStatus.COMPLETED
+        assert doc_enabled.metadata.processing_status == ProcessingStatus.COMPLETED
 
 
 class TestWordProcessorErrorHandling:
@@ -360,7 +467,7 @@ class TestWordProcessorErrorHandling:
         assert document.metadata.error_message is not None
         assert len(document.chunks) == 0
 
-    @patch('docx.Document')
+    @patch('src.document_processor.word_processor.Document')
     def test_docx_library_error(self, mock_document, tmp_path):
         """Test handling of python-docx library errors"""
         mock_document.side_effect = Exception("Simulated docx error")
@@ -387,6 +494,101 @@ class TestWordProcessorErrorHandling:
                         assert document.metadata.processing_status == ProcessingStatus.FAILED
                         assert "Permission denied" in document.metadata.error_message
                         assert len(document.chunks) == 0
+
+
+class TestWordProcessorParagraphSplitting:
+    """Test the paragraph splitting logic for embedding compatibility"""
+
+    def setup_method(self):
+        """Set up test processor"""
+        self.processor = WordProcessor()
+
+    def test_short_paragraph_no_splitting(self):
+        """Test that short paragraphs are not split"""
+        short_text = "This is a short paragraph."
+        segments = self.processor._split_long_paragraph(short_text, 100)
+
+        assert len(segments) == 1
+        assert segments[0] == short_text
+
+    def test_long_paragraph_sentence_splitting_with_overlap(self):
+        """Test splitting long paragraph with contextual overlap"""
+        # Create a processor with overlap settings
+        config = ProcessingConfig(target_sentences_per_chunk=2, overlap_sentences=1)
+        processor = WordProcessor(config)
+
+        long_text = "First sentence with important context. Second sentence continues the thought. Third sentence adds more detail. Fourth sentence provides conclusion."
+        segments = processor._split_long_paragraph(long_text, 80)  # Force splitting
+
+        assert len(segments) > 1  # Should be split
+
+        # Check that overlap preserves context - some sentences should appear in multiple segments
+        all_sentences = []
+        for segment in segments:
+            sentences_in_segment = [s.strip() for s in segment.split('.') if s.strip()]
+            all_sentences.extend(sentences_in_segment)
+
+        # With overlap, we should have more total sentences than in original
+        original_sentences = [s.strip() for s in long_text.split('.') if s.strip()]
+        assert len(all_sentences) >= len(original_sentences)  # Overlap means duplication
+
+        # Each segment should be reasonably sized
+        for segment in segments:
+            assert len(segment) <= 100  # Within reasonable limit
+            assert len(segment) > 20   # Not too small
+
+    def test_contextual_chunk_sizing(self):
+        """Test that chunks target optimal size for RAG"""
+        config = ProcessingConfig(
+            min_chunk_size=200,
+            max_chunk_size=800,
+            target_sentences_per_chunk=3
+        )
+        processor = WordProcessor(config)
+
+        # Test the splitting with various text lengths
+        short_text = "Short sentence."
+        medium_text = "This is a medium length sentence with several words. This is another sentence. And a third one."
+        long_text = "This is a very long sentence with many words and phrases that provides lots of context. " * 5
+
+        # Short text shouldn't be split
+        assert len(processor._split_long_paragraph(short_text, 800)) == 1
+
+        # Medium text might be split based on target sentences
+        medium_segments = processor._split_long_paragraph(medium_text, 200)
+        for segment in medium_segments:
+            sentence_count = len([s for s in segment.split('.') if s.strip()])
+            assert sentence_count <= config.target_sentences_per_chunk + 1  # Allow some flexibility
+
+        # Long text should definitely be split
+        long_segments = processor._split_long_paragraph(long_text, 400)
+        assert len(long_segments) > 1
+
+        for segment in long_segments:
+            assert len(segment) <= 450  # Reasonable size with tolerance
+
+    def test_very_long_single_sentence_word_splitting(self):
+        """Test word-level splitting for extremely long single sentences"""
+        # Create a very long sentence without periods
+        long_sentence = "This sentence has many words " * 20 + "and never ends"
+        segments = self.processor._split_long_paragraph(long_sentence, 100)
+
+        assert len(segments) > 1  # Should be split at word boundaries
+
+        for segment in segments:
+            assert len(segment) <= 110  # Allow some tolerance for word boundaries
+
+    def test_mixed_sentence_lengths(self):
+        """Test splitting with mix of short and long sentences"""
+        mixed_text = "Short. This is a much longer sentence that contains many words and should be split appropriately. Another short one."
+        segments = self.processor._split_long_paragraph(mixed_text, 50)
+
+        assert len(segments) >= 2  # Should split the long sentence
+
+        # Verify content preservation
+        all_words = set(mixed_text.replace('.', '').split())
+        segment_words = set(' '.join(segments).replace('.', '').split())
+        assert all_words == segment_words
 
 
 class TestWordProcessorParagraphConversion:

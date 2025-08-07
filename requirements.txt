@@ -56,9 +56,5 @@ pytest>=7.4.0                    # Testing framework
 pytest-asyncio>=0.21.0           # Async testing support
 pytest-cov>=4.0.0                # Test coverage reporting
 
-# -----------------------------------------------------------------------------
-# OPTIONAL: PERFORMANCE MONITORING
-# Used by: Monitoring embedding performance, memory usage (development)
-# -----------------------------------------------------------------------------
-# psutil>=5.9.0                  # System monitoring (uncomment if needed)
-# memory-profiler>=0.60.0        # Memory usage profiling (uncomment if needed)
+# For Ollama LLM integration
+requests>=2.28.0

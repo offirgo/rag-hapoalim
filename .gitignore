@@ -44,14 +44,6 @@ venv.bak/
 .AppleDouble
 .LSOverride
 
-vector_db/
-faiss_indexes/
-# Only ignore the data files, not the Python modules
-*.faiss
-*.bin
-*.pkl
-*.index
-
 # Model cache (sentence-transformers)
 .cache/
 sentence_transformers_cache/
